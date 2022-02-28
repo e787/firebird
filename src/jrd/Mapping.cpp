@@ -257,8 +257,9 @@ public:
 
 		if (!att)
 		{
-			dataFlag = true;
 			downFlag = isDown;
+			if (!isDown)
+				dataFlag = true;
 			return;
 		}
 
@@ -804,6 +805,7 @@ private:
 				if (p->flags & MappingHeader::FLAG_DELIVER)
 				{
 					resetMap(sharedMemory->getHeader()->databaseForReset);
+					p->flags &= ~MappingHeader::FLAG_DELIVER;
 
 					MappingHeader* sMem = sharedMemory->getHeader();
 					MappingHeader::Process* cur = &sMem->process[sMem->currentProcess];
@@ -811,7 +813,6 @@ private:
 					{
 						(Arg::Gds(isc_random) << "Error posting callbackEvent in mapping shared memory").raise();
 					}
-					p->flags &= ~MappingHeader::FLAG_DELIVER;
 				}
 
 				if (startup)
@@ -1034,10 +1035,10 @@ bool mapUser(string& name, string& trusted_role, Firebird::string* auth_method,
 			if (syncType == SYNC_EXCLUSIVE)
 			{
 				if (!iSec)
-					iSec.attach(st, securityAlias, cryptCb);
+					secDown = iSec.attach(st, securityAlias, cryptCb);
 
 				if (db && !iDb)
-					iDb.attach(st, alias, cryptCb);
+					dbDown = iDb.attach(st, alias, cryptCb);
 			}
 
 			MutexEnsureUnlock g(treeMutex, FB_FUNCTION);

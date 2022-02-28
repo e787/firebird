@@ -410,7 +410,7 @@ public:
 		{
 			if (getUnloadDetector()->unloadStarted())
 			{
-				Arg::Gds(isc_shutdown).raise();
+				Arg::Gds(isc_att_shutdown).raise();
 			}
 
 			IPluginBase* p = FB_NEW JProvider(factoryParameter);
@@ -946,6 +946,7 @@ public:
 	bool	dpb_reset_icu;
 	bool	dpb_map_attach;
 	ULONG	dpb_remote_flags;
+	bool	dpb_clear_map;
 
 	// here begin compound objects
 	// for constructor to work properly dpb_user_name
@@ -1350,7 +1351,7 @@ void JRD_make_role_name(string& userIdRole, const int dialect)
 		// Invoke utility twice: first to strip quotes, next to uppercase if needed
 		// For unquoted string nothing bad happens
 		fb_utils::dpbItemUpper(userIdRole);
-		fb_utils::dpbItemUpper(userIdRole);
+		userIdRole.upper();
 		break;
 
 	case SQL_DIALECT_V6_TRANSITION:
@@ -1458,6 +1459,12 @@ JAttachment* JProvider::internalAttach(CheckStatusWrapper* user_status, const ch
 			// Check to see if the database is truly local
 			if (ISC_check_if_remote(expanded_name, true))
 				ERR_post(Arg::Gds(isc_unavailable));
+
+			// Clear old mapping cache data on request.
+			// Unfortunately have to do it w/o access rights check - to check access rights engine
+			// needs correct mapping which sometimes can't be guaranteed before cleaning cache.
+			if (options.dpb_clear_map)
+				clearMap(expanded_name.c_str());
 
 			// Check for correct credentials supplied
 			if (existingId)
@@ -1759,11 +1766,7 @@ JAttachment* JProvider::internalAttach(CheckStatusWrapper* user_status, const ch
 				if (!allow_access)
 				{
 					// Note we throw exception here when entering full-shutdown mode
-					Arg::Gds v(isc_shutdown);
-					v << Arg::Str(org_filename);
-					if (attachment->att_user->usr_flags & USR_mapdown)
-						v << Arg::Gds(isc_map_down);
-					ERR_post(v);
+					ERR_post(Arg::Gds(isc_shutdown) << org_filename);
 				}
 			}
 
@@ -2706,6 +2709,9 @@ JAttachment* JProvider::createDatabase(CheckStatusWrapper* user_status, const ch
 				dbb->dbb_database_name = dbb->dbb_filename;
 
 			dbb->dbb_tip_cache = FB_NEW_POOL(*dbb->dbb_permanent) TipCache(dbb);
+
+			// Clear old mapping cache data (if present)
+			clearMap(dbb->dbb_filename.c_str());
 
 			// Initialize backup difference subsystem. This must be done before WAL and shadowing
 			// is enabled because nbackup it is a lower level subsystem
@@ -6013,6 +6019,10 @@ void DatabaseOptions::get(const UCHAR* dpb, USHORT dpb_length, bool& invalid_cli
 
 		case isc_dpb_config:
 			getString(rdr, dpb_config);
+			break;
+
+		case isc_dpb_clear_map:
+			dpb_clear_map = rdr.getBoolean();
 			break;
 
 		default:

@@ -8,8 +8,8 @@ BuildVersion="$Id: writeBuildNum.sh,v 1.28732 2010/05/29 13:12:08 fsg Exp $"
 BuildType=V
 MajorVer=3
 MinorVer=0
-RevNo=9
-BuildNum=33561
+RevNo=10
+BuildNum=33569
 
 NowAt=`pwd`
 cd `dirname $0`
