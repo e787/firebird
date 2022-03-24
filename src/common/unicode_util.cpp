@@ -186,7 +186,9 @@ public:
 	USet* (U_EXPORT2 *usetOpen)(UChar32 start, UChar32 end);
 
 	void (U_EXPORT2 *ucolClose)(UCollator* coll);
-	int32_t (U_EXPORT2 *ucolGetContractions)(const UCollator* coll, USet* conts, UErrorCode* status);
+	int32_t (U_EXPORT2 *ucolGetContractionsAndExpansions)(const UCollator* coll, USet* contractions, USet* expansions,
+		UBool addPrefixes, UErrorCode* status);
+
 	int32_t (U_EXPORT2 *ucolGetSortKey)(const UCollator* coll, const UChar* source,
 		int32_t sourceLength, uint8_t* result, int32_t resultLength);
 	UCollator* (U_EXPORT2 *ucolOpen)(const char* loc, UErrorCode* status);
@@ -1034,7 +1036,8 @@ UnicodeUtil::ICU* UnicodeUtil::loadICU(const string& icuVersion, const string& c
 			icu->getEntryPoint("uset_open", icu->ucModule, icu->usetOpen);
 
 			icu->getEntryPoint("ucol_close", icu->inModule, icu->ucolClose);
-			icu->getEntryPoint("ucol_getContractions", icu->inModule, icu->ucolGetContractions);
+			icu->getEntryPoint("ucol_getContractionsAndExpansions", icu->inModule,
+				icu->ucolGetContractionsAndExpansions);
 			icu->getEntryPoint("ucol_getSortKey", icu->inModule, icu->ucolGetSortKey);
 			icu->getEntryPoint("ucol_open", icu->inModule, icu->ucolOpen);
 			icu->getEntryPoint("ucol_setAttribute", icu->inModule, icu->ucolSetAttribute);
@@ -1336,10 +1339,6 @@ UnicodeUtil::Utf16Collation* UnicodeUtil::Utf16Collation::create(
 			icu->ucolSetAttribute(compareCollator, UCOL_STRENGTH, UCOL_SECONDARY, &status);
 	}
 
-	USet* contractions = icu->usetOpen(0, 0);
-	// status not verified here.
-	icu->ucolGetContractions(partialCollator, contractions, &status);
-
 	Utf16Collation* obj = FB_NEW Utf16Collation();
 	obj->icu = icu;
 	obj->tt = tt;
@@ -1347,9 +1346,149 @@ UnicodeUtil::Utf16Collation* UnicodeUtil::Utf16Collation::create(
 	obj->compareCollator = compareCollator;
 	obj->partialCollator = partialCollator;
 	obj->sortCollator = sortCollator;
-	obj->contractions = contractions;
-	obj->contractionsCount = icu->usetGetItemCount(contractions);
 	obj->numericSort = isNumericSort;
+	obj->maxContractionsPrefixLength = 0;
+
+	USet* contractions = icu->usetOpen(1, 0);
+	// status not verified here.
+	icu->ucolGetContractionsAndExpansions(partialCollator, contractions, NULL, false, &status);
+
+	int contractionsCount = icu->usetGetItemCount(contractions);
+
+	for (int contractionIndex = 0; contractionIndex < contractionsCount; ++contractionIndex)
+	{
+		UChar strChars[10];
+		UChar32 start, end;
+
+		status = U_ZERO_ERROR;
+		int len = icu->usetGetItem(contractions, contractionIndex, &start, &end, strChars, sizeof(strChars), &status);
+
+		if (len >= 2)
+		{
+			obj->maxContractionsPrefixLength = len - 1 > obj->maxContractionsPrefixLength ?
+				len - 1 : obj->maxContractionsPrefixLength;
+
+			UCHAR key[100];
+			int keyLen = icu->ucolGetSortKey(partialCollator, strChars, len, key, sizeof(key));
+
+			for (int prefixLen = 1; prefixLen < len; ++prefixLen)
+			{
+				const Array<USHORT> str(strChars, prefixLen);
+				SortKeyArray* keySet = obj->contractionsPrefix.get(str);
+
+				if (!keySet)
+				{
+					keySet = obj->contractionsPrefix.put(str);
+
+					UCHAR prefixKey[100];
+					int prefixKeyLen = icu->ucolGetSortKey(partialCollator,
+						strChars, prefixLen, prefixKey, sizeof(prefixKey));
+
+					keySet->add(Array<UCHAR>(prefixKey, prefixKeyLen));
+				}
+
+				keySet->add(Array<UCHAR>(key, keyLen));
+			}
+		}
+	}
+
+	icu->usetClose(contractions);
+
+	ContractionsPrefixMap::Accessor accessor(&obj->contractionsPrefix);
+
+	for (bool found = accessor.getFirst(); found; found = accessor.getNext())
+	{
+		SortKeyArray& keySet = accessor.current()->second;
+
+		if (keySet.getCount() <= 1)
+			continue;
+
+		fb_assert(accessor.current()->first.hasData());
+		USHORT ch = accessor.current()->first[0];
+
+		if (ch >= 0xFDD0 && ch <= 0xFDEF)
+		{
+			keySet.clear();
+			keySet.add(Array<UCHAR>());
+			continue;
+		}
+
+		SortKeyArray::iterator firstKeyIt = keySet.begin();
+		SortKeyArray::iterator lastKeyIt = --keySet.end();
+
+		const UCHAR* firstKeyDataIt = firstKeyIt->begin();
+		const UCHAR* lastKeyDataIt = lastKeyIt->begin();
+		const UCHAR* firstKeyDataEnd = firstKeyIt->end();
+		const UCHAR* lastKeyDataEnd = lastKeyIt->end();
+
+		if (*firstKeyDataIt == *lastKeyDataIt)
+		{
+			unsigned common = 0;
+
+			do
+			{
+				++common;
+			} while (++firstKeyDataIt != firstKeyDataEnd && ++lastKeyDataIt != lastKeyDataEnd &&
+				*firstKeyDataIt == *lastKeyDataIt);
+
+			Array<UCHAR> commonKey(firstKeyIt->begin(), common);
+			keySet.clear();
+			keySet.add(commonKey);
+		}
+		else
+		{
+			SortKeyArray::iterator secondKeyIt = ++keySet.begin();
+			const UCHAR* secondKeyDataIt = secondKeyIt->begin();
+			const UCHAR* secondKeyDataEnd = secondKeyIt->end();
+
+			ObjectsArray<Array<UCHAR> > commonKeys;
+			commonKeys.add(*firstKeyIt);
+
+			while (secondKeyIt != keySet.end())
+			{
+				unsigned common = 0;
+
+				while (firstKeyDataIt != firstKeyDataEnd && secondKeyDataIt != secondKeyDataEnd &&
+					*firstKeyDataIt == *secondKeyDataIt)
+				{
+					++common;
+					++firstKeyDataIt;
+					++secondKeyDataIt;
+				}
+
+				unsigned backSize = commonKeys.back()->getCount();
+
+				if (common > backSize)
+					commonKeys.back()->append(secondKeyIt->begin() + backSize, common - backSize);
+				else if (common < backSize)
+				{
+					if (common == 0)
+						commonKeys.push(*secondKeyIt);
+					else
+						commonKeys.back()->resize(common);
+				}
+
+				if (++secondKeyIt != keySet.end())
+				{
+					++firstKeyIt;
+
+					firstKeyDataIt = firstKeyIt->begin();
+					secondKeyDataIt = secondKeyIt->begin();
+
+					firstKeyDataEnd = firstKeyIt->end();
+					secondKeyDataEnd = secondKeyIt->end();
+				}
+			}
+
+			keySet.clear();
+
+			for (ObjectsArray<Array<UCHAR> >::iterator ckIt = commonKeys.begin(); ckIt != commonKeys.end(); ++ckIt)
+				keySet.add(*ckIt);
+		}
+	}
+
+	if (obj->maxContractionsPrefixLength)
+		tt->texttype_flags |= TEXTTYPE_MULTI_STARTING_KEY;
 
 	return obj;
 }
@@ -1357,8 +1496,6 @@ UnicodeUtil::Utf16Collation* UnicodeUtil::Utf16Collation::create(
 
 UnicodeUtil::Utf16Collation::~Utf16Collation()
 {
-	icu->usetClose(contractions);
-
 	icu->ucolClose(compareCollator);
 	icu->ucolClose(partialCollator);
 	icu->ucolClose(sortCollator);
@@ -1403,55 +1540,18 @@ USHORT UnicodeUtil::Utf16Collation::stringToKey(USHORT srcLen, const USHORT* src
 		srcLenLong = pad - src + 1;
 	}
 
+	if (srcLenLong == 0)
+		return 0;
+
 	HalfStaticArray<USHORT, BUFFER_SMALL / 2> buffer;
 	const UCollator* coll = NULL;
 
 	switch (key_type)
 	{
 		case INTL_KEY_PARTIAL:
-		{
+		case INTL_KEY_MULTI_STARTING:
 			coll = partialCollator;
-
-			// Remove last bytes of key if they are start of a contraction
-			// to correctly find in the index.
-			ConversionICU& cIcu(getConversionICU());
-			for (int i = 0; i < contractionsCount; ++i)
-			{
-				UChar str[10];
-				UErrorCode status = U_ZERO_ERROR;
-				int len = icu->usetGetItem(contractions, i, NULL, NULL, str, sizeof(str), &status);
-
-				if (len > SLONG(srcLenLong))
-					len = srcLenLong;
-				else
-					--len;
-
-				// safe cast - alignment not changed
-				if (cIcu.u_strCompare(str, len,
-						reinterpret_cast<const UChar*>(src) + srcLenLong - len, len, true) == 0)
-				{
-					srcLenLong -= len;
-					break;
-				}
-			}
-
-			if (numericSort)
-			{
-				// ASF: Wee need to remove trailing numbers to return sub key that
-				// matches full key. Example: "abc1" becomes "abc" to match "abc10".
-				const USHORT* p = src + srcLenLong - 1;
-
-				for (; p >= src; --p)
-				{
-					if (!(*p >= '0' && *p <= '9'))
-						break;
-				}
-
-				srcLenLong = p - src + 1;
-			}
-
 			break;
-		}
 
 		case INTL_KEY_UNIQUE:
 			coll = compareCollator;
@@ -1469,11 +1569,102 @@ USHORT UnicodeUtil::Utf16Collation::stringToKey(USHORT srcLen, const USHORT* src
 			return INTL_BAD_KEY_LENGTH;
 	}
 
-	if (srcLenLong == 0)
-		return 0;
+	if (key_type == INTL_KEY_MULTI_STARTING)
+	{
+		bool trailingNumbersRemoved = false;
 
-	return icu->ucolGetSortKey(coll,
+		if (numericSort)
+		{
+			// ASF: Wee need to remove trailing numbers to return sub key that
+			// matches full key. Example: "abc1" becomes "abc" to match "abc10".
+			const USHORT* p = src + srcLenLong - 1;
+
+			for (; p >= src; --p)
+			{
+				if (!(*p >= '0' && *p <= '9'))
+					break;
+
+				trailingNumbersRemoved = true;
+			}
+
+			srcLenLong = p - src + 1;
+		}
+
+		if (!trailingNumbersRemoved)
+		{
+			for (int i = MIN(maxContractionsPrefixLength, srcLenLong); i > 0; --i)
+			{
+				SortKeyArray* keys = contractionsPrefix.get(Array<USHORT>(src + srcLenLong - i, i));
+
+				if (keys)
+				{
+					const UCHAR* dstStart = dst;
+					ULONG prefixLen;
+
+					srcLenLong -= i;
+
+					if (srcLenLong != 0)
+					{
+						prefixLen = icu->ucolGetSortKey(coll,
+							reinterpret_cast<const UChar*>(src), srcLenLong, dst + 2, dstLen - 2);
+
+						if (prefixLen == 0 || prefixLen > dstLen - 2 || prefixLen > MAX_USHORT)
+							return INTL_BAD_KEY_LENGTH;
+
+						fb_assert(dst[2 + prefixLen - 1] == '\0');
+						--prefixLen;
+						dstLen -= 2 + prefixLen;
+					}
+					else
+						prefixLen = 0;
+
+					for (SortKeyArray::const_iterator keyIt = keys->begin();
+						 keyIt != keys->end();
+						 ++keyIt)
+					{
+						const ULONG keyLen = prefixLen + keyIt->getCount();
+
+						if (keyLen > dstLen - 2 || keyLen > MAX_USHORT)
+							return INTL_BAD_KEY_LENGTH;
+
+						dst[0] = UCHAR(keyLen & 0xFF);
+						dst[1] = UCHAR(keyLen >> 8);
+
+						if (dst != dstStart)
+							memcpy(dst + 2, dstStart + 2, prefixLen);
+
+						memcpy(dst + 2 + prefixLen, keyIt->begin(), keyIt->getCount());
+						dst += 2 + keyLen;
+						dstLen -= 2 + keyLen;
+					}
+
+					return dst - dstStart;
+				}
+			}
+		}
+
+		ULONG keyLen = icu->ucolGetSortKey(coll,
+			reinterpret_cast<const UChar*>(src), srcLenLong, dst + 2, dstLen - 3);
+
+		if (keyLen == 0 || keyLen > dstLen - 3 || keyLen > MAX_USHORT)
+			return INTL_BAD_KEY_LENGTH;
+
+		fb_assert(dst[2 + keyLen - 1] == '\0');
+		--keyLen;
+
+		dst[0] = UCHAR(keyLen & 0xFF);
+		dst[1] = UCHAR(keyLen >> 8);
+
+		return keyLen + 2;
+	}
+
+	const ULONG keyLen = icu->ucolGetSortKey(coll,
 		reinterpret_cast<const UChar*>(src), srcLenLong, dst, dstLen);
+
+	if (keyLen == 0 || keyLen > dstLen || keyLen > MAX_USHORT)
+		return INTL_BAD_KEY_LENGTH;
+
+	return keyLen;
 }
 
 
