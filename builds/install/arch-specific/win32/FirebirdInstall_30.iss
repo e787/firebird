@@ -191,7 +191,7 @@
 ;If we are still under development we can ignore some missing files.
 #if GetEnv("FBBUILD_PROD_STATUS") == "DEV"
 #define SkipFileIfDevStatus " skipifsourcedoesntexist "
-#else 
+#else
 #define SkipFileIfDevStatus " "
 #endif
 
@@ -351,7 +351,7 @@ Name: ru; MessagesFile: compiler:Languages\Russian.isl; InfoBeforeFile: {#GenDir
 #endif
 
 #ifdef iss_debug
-; *** Note - this comment section needs revision or deletion. 
+; *** Note - this comment section needs revision or deletion.
 ; It is only applicable to the ansi installer, which is no longer
 ; supported for Firebird 3
 ; By default, the languages available at runtime depend on the user's
@@ -435,7 +435,7 @@ Root: HKLM; Subkey: "SOFTWARE\FirebirdSQL"; ValueType: none; Flags: deletekey;
 
 [Icons]
 Name: {group}\Firebird Server; Filename: {app}\firebird.exe; Parameters: {code:StartAppParams}; Flags: runminimized; MinVersion: 4.0,4.0;  Check: InstallServerIcon; IconIndex: 0; Components: ServerComponent; Comment: Run Firebird Server (without guardian)
-Name: {group}\Firebird Guardian; Filename: {app}\fbguard.exe; Parameters: {code:StartAppParams}; Flags: runminimized; MinVersion: 4.0,4.0;  Check: InstallGuardianIcon; IconIndex: 1; Components: ServerComponent; Comment: Run Firebird Server (with guardian); 
+Name: {group}\Firebird Guardian; Filename: {app}\fbguard.exe; Parameters: {code:StartAppParams}; Flags: runminimized; MinVersion: 4.0,4.0;  Check: InstallGuardianIcon; IconIndex: 1; Components: ServerComponent; Comment: Run Firebird Server (with guardian);
 Name: {group}\Firebird ISQL Tool; Filename: {app}\isql.exe; Parameters: -z; WorkingDir: {app}; MinVersion: 4.0,4.0;  Comment: {cm:RunISQL}
 Name: {group}\Firebird {#FB_cur_ver} Release Notes; Filename: {app}\doc\Firebird_v{#FB_cur_ver}.ReleaseNotes.pdf; MinVersion: 4.0,4.0; Comment: {#MyAppName} {cm:ReleaseNotes}
 Name: {group}\Firebird {#GroupnameVer} Quick Start Guide; Filename: {app}\doc\Firebird-3-QuickStart.pdf; MinVersion: 4.0,4.0; Comment: {#MyAppName} {#FB_cur_ver}
@@ -688,7 +688,7 @@ begin
 //	or
 //    (pos('/?',Uppercase(CommandLine)) > 0) or		// InnoSetup displays its own help if these switches are passed.
 //    (pos('/H',Uppercase(CommandLine)) > 0) ) 		// Note also that our help scren only appears after the Choose Language dialogue :-(
-	then begin
+  then begin
     ShowHelpDlg;
     result := False;
     Exit;
@@ -835,7 +835,7 @@ begin
   if IsComponentSelected('ServerComponent') and ( IsTaskSelected('UseSuperServerTask\UseGuardianTask')
       or ( IsTaskSelected('UseSuperClassicTask\UseGuardianTask') ) ) then
     SvcParams := ServerType + SvcParams +  ' -guardian ';
-  
+
   InstanceName := ServiceName('We currently do not support or test for a different instance name');
 
   SvcParams := SvcParams + InstanceName;
@@ -858,29 +858,69 @@ begin
 end;
 
 
-
-
-function InitSecurityDB: Boolean;
+function InitSecurityDB( PluginName: String ) : Boolean;
 var
   AStringList: TStringList;
   TempDir: String;
-	ResultCode: Integer;
-	CmdStr: string;
+  ResultCode: Integer;
+  CmdStr: string;
+  InputStr: string;
+  OutputStr: string;
 begin
-	TempDir := ExpandConstant( '{tmp}' );
-	CmdStr := ExpandConstant( '{app}\isql.exe' );
-	AStringList := TStringList.create;
-	with AStringList do begin
-		Add( 'create user ' + GetAdminUserName + ' password ''' + GetAdminUserPassword + ''' using plugin Srp;' );
-    if IsTaskSelected('EnableLegacyClientAuth') then
-      if ( ( uppercase( GetAdminUserName ) <> 'SYSDBA' ) or ( GetAdminUserPassword <> 'masterkey' ) ) then
-        Add( 'create or alter user ' + GetAdminUserName + ' password ''' + GetAdminUserPassword + ''' using plugin Legacy_UserManager;' );
-		Add( 'commit;' );  //Technically exit implies a commit so this not necessary. OTOH, explicitly committing makes for more readable code.
-		Add( 'exit;' );
-		SaveToFile( Tempdir +'\temp.sql' );
-	end;
-	Result := Exec( CmdStr , ' -m -m2 -user SYSDBA -i ' + TempDir + '\temp.sql -o ' + TempDir + '\temp.sql.txt employee ' , TempDir, SW_HIDE, ewWaitUntilTerminated, ResultCode );
-	DeleteFile( TempDir + +'\temp.sql ');
+
+  if PluginName = '' then
+    PluginName := 'Srp';
+
+  TempDir := ExpandConstant( '{tmp}' );
+  CmdStr := ExpandConstant( '{app}\isql.exe' );
+  InputStr := TempDir + '\' + PluginName + '_temp.sql';
+  OutputStr := InputStr + '.txt';
+
+  // Do we need to do this?
+  if FileExists( InputStr ) then DeleteFile( InputStr );
+  if FileExists( OutputStr ) then DeleteFile( OutputStr );
+
+  AStringList := TStringList.create;
+  with AStringList do begin
+    Add( 'create or alter user ' + GetAdminUserName + ' password ''' + GetAdminUserPassword + ''' using plugin ' + PluginName + ';' );
+    Add( 'exit;' );
+    SaveToFile( InputStr );
+  end;
+
+
+  Result := Exec( CmdStr , ' -m -m2 -user SYSDBA -i ' + InputStr + ' -o ' + OutputStr + ' employee ' , TempDir, SW_HIDE, ewWaitUntilTerminated, ResultCode );
+
+// DOC NOTE - we are not actually handling a non-zero result code.
+// This is a complicated subject as the installer can be run either scripted
+// or as a GUI. This needs more research. If InitSecurityDB fails do we fail 
+// the entire install? Allow user to complete and fix manually? Or give both options?
+  if ResultCode <> 0 then begin
+    Result := False;
+    Log( 'In function InitSecurityDB Exec isql returned ' + IntToStr(ResultCode) + ' executing ' + InputStr  );
+  end;
+  if FindInFile( OutputStr, 'error' ) then begin
+    Result := False;
+    Log( 'In function InitSecurityDB FindInFile found an error in ' + OutputStr );
+  end;
+
+end;
+
+
+function ConfigLegacyClientAuth: Boolean;
+begin
+
+// This order of plugin evaluation favours Legacy_Auth as the preferred plugin
+  ReplaceLine(GetAppPath+'\firebird.conf','AuthServer = ','AuthServer = Legacy_Auth, Srp, Win_Sspi','#');
+  ReplaceLine(GetAppPath+'\firebird.conf','AuthClient = ','AuthClient = Legacy_Auth, Srp, Srp256,  Win_Sspi','#');
+  ReplaceLine(GetAppPath+'\firebird.conf','UserManager = ','UserManager = Legacy_UserManager, Srp','#');
+  ReplaceLine(GetAppPath+'\firebird.conf','WireCrypt = ','WireCrypt = enabled','#');
+
+// This order of plugin evaluation favours the more secure defaults
+//  ReplaceLine(GetAppPath+'\firebird.conf','AuthServer = ','AuthServer = Srp, Win_Sspi, Legacy_Auth ','#');
+//  ReplaceLine(GetAppPath+'\firebird.conf','AuthClient = ','AuthClient = Srp, Srp256, Win_Sspi, Legacy_Auth','#');
+//  ReplaceLine(GetAppPath+'\firebird.conf','UserManager = ','UserManager = Srp, Legacy_UserManager','#');
+//  ReplaceLine(GetAppPath+'\firebird.conf','WireCrypt = ','WireCrypt = enabled','#');
+
 end;
 
 
@@ -897,8 +937,8 @@ end;
 function InstallServerIcon(): Boolean;
 begin
   result := false;
-  if IsTaskSelected('UseApplicationTask') and 
-    IsComponentSelected('ServerComponent') and 
+  if IsTaskSelected('UseApplicationTask') and
+    IsComponentSelected('ServerComponent') and
       not ( IsTaskSelected('UseSuperServerTask\UseGuardianTask') or
             IsTaskSelected('UseSuperClassicTask\UseGuardianTask') ) then
       result := true;
@@ -906,7 +946,7 @@ end;
 
 function StartApp(Default: String): String;
 begin
-  if IsComponentSelected('ServerComponent') and ( 
+  if IsComponentSelected('ServerComponent') and (
       IsTaskSelected('UseSuperServerTask\UseGuardianTask') or
       IsTaskSelected('UseSuperClassicTask\UseGuardianTask') ) then
     Result := GetAppPath+'\fbguard.exe'
@@ -945,8 +985,8 @@ end;
 
 
 procedure UpdateFirebirdConf;
-// Update firebird conf. 
-// If user has deselected the guardian we should update firebird.conf accordingly. 
+// Update firebird conf.
+// If user has deselected the guardian we should update firebird.conf accordingly.
 // We also test if user has asked for classic or super server
 // If EnableLegacyClientAuth has ben selected we update the file.......
 // Otherwise we leave the file unchanged.
@@ -956,34 +996,31 @@ begin
   //firebird.conf exists. If it doesn't then we don't care.
   if FileExists(GetAppPath+'\firebird.conf') then begin
 
-    if (IsComponentSelected('ServerComponent') ) then begin 
+    if (IsComponentSelected('ServerComponent') ) then begin
 
-// Setting GuardianOption to 0 makes no sense. If the user deploys the guardian 
-// there is an expectation that it will restart the server in the event of a crash. 
+// Setting GuardianOption to 0 makes no sense. If the user deploys the guardian
+// there is an expectation that it will restart the server in the event of a crash.
 // Otherwise, why start firebird with the guardian?
 //      if not ( IsTaskSelected('UseSuperServerTask\UseGuardianTask') or  IsTaskSelected('UseSuperClassicTask\UseGuardianTask') ) then
 //				ReplaceLine(GetAppPath+'\firebird.conf','GuardianOption','GuardianOption = 0','#');
 
-      // These attempts to modify firebird.conf may not survice repeated installs.  
+      // These attempts to modify firebird.conf may not survice repeated installs.
 
-			if IsTaskSelected('UseClassicServerTask') then
-				ReplaceLine(GetAppPath+'\firebird.conf','ServerMode = ','ServerMode = Classic','#');
+      if IsTaskSelected('UseClassicServerTask') then
+        ReplaceLine(GetAppPath+'\firebird.conf','ServerMode = ','ServerMode = Classic','#');
 
       if IsTaskSelected('UseSuperClassicTask') then
-				ReplaceLine(GetAppPath+'\firebird.conf','ServerMode = ','ServerMode = SuperClassic','#');
+        ReplaceLine(GetAppPath+'\firebird.conf','ServerMode = ','ServerMode = SuperClassic','#');
 
-			if IsTaskSelected('UseSuperServerTask')  then
-				ReplaceLine(GetAppPath+'\firebird.conf','ServerMode = ','ServerMode = Super','#');
+      if IsTaskSelected('UseSuperServerTask')  then
+        ReplaceLine(GetAppPath+'\firebird.conf','ServerMode = ','ServerMode = Super','#');
 
       if IsTaskSelected('EnableLegacyClientAuth') then begin
-				ReplaceLine(GetAppPath+'\firebird.conf','AuthServer = ','AuthServer = Legacy_Auth, Srp, Win_Sspi','#');
-				ReplaceLine(GetAppPath+'\firebird.conf','AuthClient = ','AuthClient = Legacy_Auth, Srp, Win_Sspi','#');
-				ReplaceLine(GetAppPath+'\firebird.conf','UserManager = ','UserManager = Legacy_UserManager, Srp','#');
-				ReplaceLine(GetAppPath+'\firebird.conf','WireCrypt = ','WireCrypt = enabled','#');
+        ConfigLegacyClientAuth;
       end;
 
-		end;	
-			
+    end;
+
   end;
 end;
 
@@ -1021,9 +1058,9 @@ end;
 
 procedure CurPageChanged(CurPage: Integer);
 // These are the predefined page IDs of the Wizard form as of InnoSetup 5.5.6
-// wpWelcome, wpLicense, wpPassword, wpInfoBefore, wpUserInfo, 
-// wpSelectDir, wpSelectComponents, wpSelectProgramGroup, wpSelectTasks, 
-// wpReady, wpPreparing, wpInstalling, wpInfoAfter, wpFinished 
+// wpWelcome, wpLicense, wpPassword, wpInfoBefore, wpUserInfo,
+// wpSelectDir, wpSelectComponents, wpSelectProgramGroup, wpSelectTasks,
+// wpReady, wpPreparing, wpInstalling, wpInfoAfter, wpFinished
 begin
   case CurPage of
     wpWelcome:      ResizeWizardForm(True); //There was a bug: every time when "go back" pressed the form was resized!
@@ -1034,12 +1071,12 @@ end;
 
 
 procedure CurStepChanged(CurStep: TSetupStep);
-// currently just three steps - ssInstall, ssPostInstall, ssDone 
+// currently just three steps - ssInstall, ssPostInstall, ssDone
 var
   AppStr: String;
   ReadMeFileStr: String;
 begin
-   case CurStep of
+  case CurStep of
     ssInstall: begin
       RenamePreFB3RC1Files;
       SetupSharedFilesArray;
@@ -1054,13 +1091,15 @@ begin
       IncrementSharedCount(Is64BitInstallMode, GetAppPath+'\fbtrace.conf', false);
       IncrementSharedCount(Is64BitInstallMode, GetAppPath+'\security3.fdb', false);
 
-			InitSecurityDB;
+      InitSecurityDB('Srp');
 
       //Fix up conf file
       UpdateFirebirdConf;
       RemoveSavedConfIfNoDiff;
 
-				
+      if IsTaskSelected('EnableLegacyClientAuth') then
+        InitSecurityDB( 'Legacy_UserManager' );
+
       end;
 
     ssDone: begin
@@ -1099,7 +1138,7 @@ end;
 // # FIXME - we can probably remove this function
 function ChooseUninstallIcon(Default: String): String;
 begin
-	result := GetAppPath+'\firebird.exe';
+  result := GetAppPath+'\firebird.exe';
 end;
 
 //InnoSetup has a Check Parameter that allows installation if the function returns true.
@@ -1175,11 +1214,11 @@ begin
       // a) Decrement shared count of each one and
       // b) If Decrement reaches 0 (ie, function returns true) then we
             //    delete the file.
-            // c) We arbitrarily break after 100 loops. Typically the shared count should only be 
+            // c) We arbitrarily break after 100 loops. Typically the shared count should only be
             //    in single digits anyway but we don't want to risk the test entering an endless loop.
             i := 0;
-            while not DecrementSharedCount(Is64BitInstallMode, aStringList[ count ] ) 
-            do 
+            while not DecrementSharedCount(Is64BitInstallMode, aStringList[ count ] )
+            do
               if i = 100 then break else inc(i);
 
             res := DeleteFile( aStringList[ count ] );
@@ -1204,29 +1243,31 @@ begin
       Result := True
     else if not ConfigureAuthentication then
       Result := True
-    else 
+    else
       Result := False;
 end;
 
 
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
-	i: integer;
+  i: integer;
 begin
   Result := True;
   case CurPageID of
     AdminUserPage.ID : begin
-	  { check user has entered new sysdba password correctly. }
+    { check user has entered new sysdba password correctly. }
       i := CompareStr(AdminUserPage.Values[0],AdminUserPage.Values[1]);
       If  not (i = 0) then begin
         Result := False;
         AdminUserPage.Values[0] :='';
         AdminUserPage.Values[1] :='';
         MsgBox(ExpandConstant('{cm:SYSDBAPasswordMismatch}'), mbError, MB_OK);
-	  end;
+    end;
     end;
   end;
 end;
-	
+
 begin
 end.
+
+; kate: replace-tabs on; indent-width 2; tab-width 2; replace-tabs-save on; syntax Pascal;
