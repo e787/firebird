@@ -150,6 +150,8 @@ namespace {
 		cstring* ptr;
 		cstring oldValue;
 	};
+
+	GlobalPtr<PortsCleanup> outPorts;
 }
 
 namespace Remote {
@@ -655,6 +657,15 @@ private:
 void RProvider::shutdown(CheckStatusWrapper* status, unsigned int /*timeout*/, const int /*reason*/)
 {
 	status->init();
+
+	try
+	{
+		outPorts->closePorts();
+	}
+	catch (const Exception& ex)
+	{
+		ex.stuffException(status);
+	}
 }
 
 void RProvider::setDbCryptCallback(CheckStatusWrapper* status, ICryptKeyCallback* callback)
@@ -720,7 +731,7 @@ static void batch_gds_receive(rem_port*, struct rmtque *, USHORT);
 static void batch_dsql_fetch(rem_port*, struct rmtque *, USHORT);
 static void clear_queue(rem_port*);
 static void clear_stmt_que(rem_port*, Rsr*);
-static void disconnect(rem_port*);
+static void disconnect(rem_port*, bool rmRef = true);
 static void enqueue_receive(rem_port*, t_rmtque_fn, Rdb*, void*, Rrq::rrq_repeat*);
 static void dequeue_receive(rem_port*);
 static THREAD_ENTRY_DECLARE event_thread(THREAD_ENTRY_PARAM);
@@ -5545,10 +5556,11 @@ static rem_port* analyze(ClntAuthBlock& cBlock, PathName& attach_name, unsigned 
 	}
 	catch (const Exception&)
 	{
-		disconnect(port);
+		disconnect(port, false);
 		throw;
 	}
 
+	outPorts->registerPort(port);
 	return port;
 }
 
@@ -5904,7 +5916,7 @@ static void clear_queue(rem_port* port)
 }
 
 
-static void disconnect( rem_port* port)
+static void disconnect(rem_port* port, bool rmRef)
 {
 /**************************************
  *
@@ -5973,6 +5985,12 @@ static void disconnect( rem_port* port)
 	port->port_flags |= PORT_disconnect;
 	port->disconnect();
 	delete rdb;
+	port->port_context = NULL;
+
+	// Remove from active ports
+
+	if (rmRef)
+		outPorts->unRegisterPort(port);
 }
 
 
