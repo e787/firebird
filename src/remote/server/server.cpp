@@ -2753,11 +2753,11 @@ static USHORT check_statement_type( Rsr* statement)
 
 	if (!(local_status.getState() & Firebird::IStatus::STATE_ERRORS))
 	{
-		for (const UCHAR* info = buffer; (*info != isc_info_end) && !done;)
+		for (ClumpletReader p(ClumpletReader::InfoResponse, buffer, sizeof(buffer)); !p.isEof(); p.moveNext())
 		{
-			const USHORT l = (USHORT) gds__vax_integer(info + 1, 2);
-			const USHORT type = (USHORT) gds__vax_integer(info + 3, l);
-			switch (*info)
+			const USHORT type = (USHORT) p.getInt();
+
+			switch (p.getClumpTag())
 			{
 			case isc_info_sql_stmt_type:
 				switch (type)
@@ -2772,17 +2772,12 @@ static USHORT check_statement_type( Rsr* statement)
 					break;
 				}
 				break;
+
 			case isc_info_sql_batch_fetch:
 				if (type == 0)
 					ret |= STMT_NO_BATCH;
 				break;
-			case isc_info_error:
-			case isc_info_truncated:
-				done = true;
-				break;
-
 			}
-			info += 3 + l;
 		}
 	}
 
@@ -3492,6 +3487,10 @@ void rem_port::batch_create(P_BATCH_CREATE* batch, PACKET* sendL)
 	Rsr* statement;
 	getHandle(statement, batch->p_batch_statement);
 	statement->checkIface();
+
+	// Check for previously opened batch for the statement
+	if (statement->rsr_batch)
+		Arg::Gds(isc_batch_open).raise();
 
 	const ULONG blr_length = batch->p_batch_blr.cstr_length;
 	const UCHAR* blr = batch->p_batch_blr.cstr_address;
