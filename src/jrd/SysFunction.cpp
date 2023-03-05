@@ -1270,18 +1270,30 @@ bool makeBlobAppendBlob(dsc* result, const dsc* arg, bid* blob_id = nullptr)
 void makeBlobAppend(DataTypeUtilBase* dataTypeUtil, const SysFunction* function, dsc* result,
 	int argsCount, const dsc** args)
 {
+	fb_assert(argsCount >= function->minArgCount);
+
+	result->makeBlob(isc_blob_untyped, ttype_binary);
+	result->setNullable(true);
+
 	if (argsCount > 0)
 	{
-		const dsc** ppArg = args;
-		const dsc** const end = args + argsCount;
+		for (int i = 0; i < argsCount; ++i)
+		{
+			if (makeBlobAppendBlob(result, args[i]))
+				break;
+		}
 
-		for (; ppArg < end; ppArg++)
-			if (makeBlobAppendBlob(result, *ppArg))
-				return;
+		result->setNullable(true);
+
+		for (int i = 0; i < argsCount; ++i)
+		{
+			if (!args[i]->isNullable())
+			{
+				result->setNullable(false);
+				break;
+			}
+		}
 	}
-
-	fb_assert(false);
-	result->makeBlob(isc_blob_untyped, ttype_binary);
 }
 
 
