@@ -619,8 +619,8 @@ without specifying a character set.', NULL);
 ('no_update', 'several', 'dfw.epp', NULL, 0, 520, NULL, 'cannot update', NULL, NULL);
 ('cursor_already_open', NULL, 'exe.epp', NULL, 0, 521, NULL, 'Cursor is already open', NULL, NULL);
 ('stack_trace', 'looper', 'exe.epp', NULL, 0, 522, NULL, '@1', NULL, NULL);
-('ctx_var_not_found', NULL, 'functions.cpp', NULL, 0, 523, NULL, 'Context variable @1 is not found in namespace @2', NULL, NULL);
-('ctx_namespace_invalid', NULL, 'functions.cpp', NULL, 0, 524, NULL, 'Invalid namespace name @1 passed to @2', NULL, NULL);
+('ctx_var_not_found', NULL, 'functions.cpp', NULL, 0, 523, NULL, 'Context variable ''@1'' is not found in namespace ''@2''', NULL, NULL);
+('ctx_namespace_invalid', NULL, 'functions.cpp', NULL, 0, 524, NULL, 'Invalid namespace name ''@1'' passed to @2', NULL, NULL);
 ('ctx_too_big', NULL, 'functions.cpp', NULL, 0, 525, NULL, 'Too many context variables', NULL, NULL);
 ('ctx_bad_argument', NULL, 'functions.cpp', NULL, 0, 526, NULL, 'Invalid argument passed to @1', NULL, NULL);
 ('identifier_too_long', NULL, 'par.cpp', NULL, 0, 527, NULL, 'BLR syntax error. Identifier @1... is too long', NULL, NULL);
@@ -2924,7 +2924,7 @@ This message begins with a TAB (''\t'') and ends with a newline (''\n'').', 17, 
 ('REPORT1', 'process_statement', 'isql.e', 'Each of these 4 items is followed by a newline (''\n'').', 17, 44, NULL, 'Current memory = !c
 Delta memory = !d
 Max memory = !x
-Elapsed time= !e sec
+Elapsed time = !e sec
 ', NULL, NULL);
 ('REPORT2', 'process_statement', 'isql.e', 'Each of these 5 items is followed by a newline (''\n'').', 17, 45, NULL, 'Cpu = !u sec
 Buffers = !b
@@ -3072,7 +3072,7 @@ Fetches = !f', NULL, NULL);
 ('REPORT_NEW1', 'print_performance', 'isql.epp', 'Each of these 4 items is followed by a newline (''\n'').', 17, 181, NULL, 'Current memory = !
 Delta memory = !
 Max memory = !
-Elapsed time= ~ sec
+Elapsed time = ~ sec
 ', NULL, NULL);
 ('REPORT_NEW2', 'print_performance', 'isql.epp', 'Each of these 5 items is followed by a newline (''\n'').', 17, 182, NULL, 'Cpu = ~ sec
 ', NULL, NULL);
