@@ -1164,22 +1164,7 @@ bool ISQL_errmsg(Firebird::IStatus* st)
 			}
 		}
 
-		/*
-		if (state & Firebird::IStatus::STATE_WARNINGS)
-		{
-			const ISC_STATUS* w = st->getWarnings();
-			TEXT* err = errbuf;
-			unsigned es = sizeof(errbuf);
-			while (fb_interpret(err, es, &w)) {
-				STDERROUT(errbuf);
-				if (err == errbuf)
-				{
-					*err++ = '-';
-					--es;
-				}
-			}
-		}
-		*/
+		ISQL_warning(st);
 
 		if (Input_file)
 		{
@@ -1243,7 +1228,7 @@ bool ISQL_errmsg(Firebird::IStatus* st)
 }
 
 
-void ISQL_warning(Firebird::CheckStatusWrapper* st)
+void ISQL_warning(Firebird::IStatus* st)
 {
 /**************************************
  *
