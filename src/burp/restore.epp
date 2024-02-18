@@ -195,7 +195,7 @@ static inline UCHAR get(BurpGlobals* tdgbl)
 	return tdgbl->get();
 }
 
-static inline FB_BOOLEAN get_boolean(BurpGlobals* tdgbl, bool deprecated)
+static inline FB_BOOLEAN get_boolean(BurpGlobals* tdgbl, bool deprecated = false)
 {
 	if (!deprecated)
 	{
@@ -523,6 +523,40 @@ int RESTORE_restore (const TEXT* file_name, const TEXT* database_name)
 		ON_ERROR
 			MISC_release_request_silent(req_handle1);
 			general_on_error ();
+		END_ERROR;
+
+		MISC_release_request_silent(req_handle1);
+	}
+
+	// If the default publication was backed up with non-default values,
+	// update the table accorgingly.
+	// NOTE: This change should be performed in the last transaction
+	// of the restore process, to avoid generating a replication stream
+	// before the database is restored successfully.
+
+	if ((tdgbl->gbl_default_pub_active || tdgbl->gbl_default_pub_auto_enable) &&
+		tdgbl->runtimeODS >= DB_VERSION_DDL12)
+	{
+		FOR (REQUEST_HANDLE req_handle1)
+			PUB IN RDB$PUBLICATIONS
+			WITH PUB.RDB$PUBLICATION_NAME EQ DEFAULT_PUBLICATION
+		{
+			fb_assert(PUB.RDB$SYSTEM_FLAG != 0);
+
+			MODIFY PUB USING
+				PUB.RDB$ACTIVE_FLAG.NULL = FALSE;
+				PUB.RDB$ACTIVE_FLAG = tdgbl->gbl_default_pub_active ? 1 : 0;
+
+				PUB.RDB$AUTO_ENABLE.NULL = FALSE;
+				PUB.RDB$AUTO_ENABLE = tdgbl->gbl_default_pub_auto_enable ? 1 : 0;
+			END_MODIFY;
+			ON_ERROR
+				general_on_error();
+			END_ERROR;
+		}
+		END_FOR;
+		ON_ERROR
+			general_on_error();
 		END_ERROR;
 
 		MISC_release_request_silent(req_handle1);
@@ -1408,9 +1442,7 @@ void general_on_error()
 		newVector.append(oldVector);
 		newVector.copyTo(isc_status);
 	}
-	BURP_print_status (true, isc_status);
-
-	BURP_abort ();
+	BURP_abort (isc_status);
 }
 
 bool get_acl(BurpGlobals* tdgbl, const TEXT* owner_nm, ISC_QUAD* blob_id, ISC_QUAD* new_blob_id)
@@ -4985,6 +5017,7 @@ bool get_function(BurpGlobals* tdgbl)
 			X.RDB$OWNER_NAME.NULL = TRUE;
 			X.RDB$MODULE_NAME.NULL = TRUE;
 			X.RDB$ENTRYPOINT.NULL = TRUE;
+			X.RDB$RETURN_ARGUMENT.NULL = TRUE;
 
 			X.RDB$SYSTEM_FLAG.NULL = FALSE;
 			X.RDB$SYSTEM_FLAG = 0;
@@ -5041,6 +5074,7 @@ bool get_function(BurpGlobals* tdgbl)
 					break;
 
 				case att_function_return_arg:
+					X.RDB$RETURN_ARGUMENT.NULL = FALSE;
 					X.RDB$RETURN_ARGUMENT = (USHORT) get_int32(tdgbl);
 					break;
 
@@ -5200,6 +5234,7 @@ bool get_function(BurpGlobals* tdgbl)
 		STORE (TRANSACTION_HANDLE local_trans
 				REQUEST_HANDLE tdgbl->handles_get_function_req_handle1)
 			X IN RDB$FUNCTIONS
+			X.RDB$RETURN_ARGUMENT.NULL = TRUE;
 			X.RDB$SYSTEM_FLAG = 0;
 			X.RDB$SYSTEM_FLAG.NULL = FALSE;
 			X.RDB$DESCRIPTION.NULL = TRUE;
@@ -5235,6 +5270,7 @@ bool get_function(BurpGlobals* tdgbl)
 					break;
 
 				case att_function_return_arg:
+					X.RDB$RETURN_ARGUMENT.NULL = FALSE;
 					X.RDB$RETURN_ARGUMENT = (USHORT) get_int32(tdgbl);
 					break;
 
@@ -5387,7 +5423,10 @@ void get_function_arg(BurpGlobals* tdgbl, bool skip_arguments)
 				break;
 
 			case att_functionarg_field_precision:
-				get_int32(tdgbl);
+				if (tdgbl->RESTORE_format >= 6)
+					get_int32(tdgbl);
+				else
+					bad_attribute(scan_next_attr, attribute, 90);
 				break;
 
 			case att_functionarg_package_name:
@@ -5449,6 +5488,7 @@ void get_function_arg(BurpGlobals* tdgbl, bool skip_arguments)
 		STORE (TRANSACTION_HANDLE local_trans
 				REQUEST_HANDLE tdgbl->handles_get_function_arg_req_handle1)
 			X IN RDB$FUNCTION_ARGUMENTS
+			X.RDB$ARGUMENT_POSITION.NULL = TRUE;
 			X.RDB$FIELD_SUB_TYPE.NULL = TRUE;
 			X.RDB$CHARACTER_SET_ID.NULL = TRUE;
 			X.RDB$FIELD_PRECISION.NULL = TRUE;
@@ -5492,6 +5532,7 @@ void get_function_arg(BurpGlobals* tdgbl, bool skip_arguments)
 					break;
 
 				case att_functionarg_position:
+					X.RDB$ARGUMENT_POSITION.NULL = FALSE;
 					X.RDB$ARGUMENT_POSITION = (USHORT) get_int32(tdgbl);
 					break;
 
@@ -5659,6 +5700,7 @@ void get_function_arg(BurpGlobals* tdgbl, bool skip_arguments)
 		STORE (TRANSACTION_HANDLE local_trans
 				REQUEST_HANDLE tdgbl->handles_get_function_arg_req_handle1)
 			X IN RDB$FUNCTION_ARGUMENTS
+			X.RDB$ARGUMENT_POSITION.NULL = TRUE;
 			X.RDB$FIELD_SUB_TYPE.NULL = TRUE;
 			X.RDB$CHARACTER_SET_ID.NULL = TRUE;
 			X.RDB$FIELD_PRECISION.NULL  = TRUE;
@@ -5676,6 +5718,7 @@ void get_function_arg(BurpGlobals* tdgbl, bool skip_arguments)
 					break;
 
 				case att_functionarg_position:
+					X.RDB$ARGUMENT_POSITION.NULL = FALSE;
 					X.RDB$ARGUMENT_POSITION = (USHORT) get_int32(tdgbl);
 					break;
 
@@ -5773,6 +5816,7 @@ void get_function_arg(BurpGlobals* tdgbl, bool skip_arguments)
 		STORE (TRANSACTION_HANDLE local_trans
 				REQUEST_HANDLE tdgbl->handles_get_function_arg_req_handle1)
 			X IN RDB$FUNCTION_ARGUMENTS
+			X.RDB$ARGUMENT_POSITION.NULL = TRUE;
 			X.RDB$FIELD_SUB_TYPE.NULL = TRUE;
 			X.RDB$CHARACTER_SET_ID.NULL = TRUE;
 
@@ -5789,6 +5833,7 @@ void get_function_arg(BurpGlobals* tdgbl, bool skip_arguments)
 					break;
 
 				case att_functionarg_position:
+					X.RDB$ARGUMENT_POSITION.NULL = FALSE;
 					X.RDB$ARGUMENT_POSITION = (USHORT) get_int32(tdgbl);
 					break;
 
@@ -11088,6 +11133,28 @@ bool restore(BurpGlobals* tdgbl, Firebird::IProvider* provider, const TEXT* file
 			}
 			break;
 
+		case att_default_pub_active:
+			if (tdgbl->RESTORE_format >= 11)
+				tdgbl->gbl_default_pub_active = get_boolean(tdgbl);
+			else
+			{
+				// Functions that use scan_next_attr initialize it to NO_SKIP using skip_init().
+				// Here we don't use that logic, hence the first param to bad_attribute is hardcoded.
+				bad_attribute(NO_SKIP, attribute, 352);
+			}
+			break;
+
+		case att_default_pub_auto_enable:
+			if (tdgbl->RESTORE_format >= 11)
+				tdgbl->gbl_default_pub_auto_enable = get_boolean(tdgbl);
+			else
+			{
+				// Functions that use scan_next_attr initialize it to NO_SKIP using skip_init().
+				// Here we don't use that logic, hence the first param to bad_attribute is hardcoded.
+				bad_attribute(NO_SKIP, attribute, 352);
+			}
+			break;
+
 		default:
 			{
 			SSHORT l = get(tdgbl);
@@ -12142,3 +12209,4 @@ void fix_system_generators(BurpGlobals* tdgbl)
 }
 
 } // namespace
+

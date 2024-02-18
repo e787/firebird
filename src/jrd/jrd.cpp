@@ -4365,12 +4365,12 @@ void JService::query(CheckStatusWrapper* user_status,
 					    receiveItems, bufferLength, buffer);
 
 			// If there is a status vector from a service thread, copy it into the thread status
-			const FbStatusVector* from = svc->getStatus();
-			if (from->getState())
+			Service::StatusAccessor status = svc->getStatusAccessor();
+			if (status->getState())
 			{
-				fb_utils::copyStatus(user_status, from);
+				fb_utils::copyStatus(user_status, status);
 				// Empty out the service status vector
-				svc->initStatus();
+				status.init();
 				return;
 			}
 		}
@@ -4432,9 +4432,10 @@ void JService::start(CheckStatusWrapper* user_status, unsigned int spbLength, co
 
 		svc->start(spbLength, spb);
 
-		if (svc->getStatus()->getState() & IStatus::STATE_ERRORS)
+		UtilSvc::StatusAccessor status = svc->getStatusAccessor();
+		if (status->getState() & IStatus::STATE_ERRORS)
 		{
-			fb_utils::copyStatus(user_status, svc->getStatus());
+			fb_utils::copyStatus(user_status, status);
 			return;
 		}
 	}
@@ -7477,11 +7478,17 @@ static JAttachment* create_attachment(const PathName& alias_name,
 
 static void check_single_maintenance(thread_db* tdbb)
 {
-	UCHAR spare_memory[RAW_HEADER_SIZE + PAGE_ALIGNMENT];
-	UCHAR* header_page_buffer = FB_ALIGN(spare_memory, PAGE_ALIGNMENT);
+	Database* const dbb = tdbb->getDatabase();
+
+	const ULONG ioBlockSize = dbb->getIOBlockSize();
+	const ULONG headerSize = MAX(RAW_HEADER_SIZE, ioBlockSize);
+
+	HalfStaticArray<UCHAR, RAW_HEADER_SIZE + PAGE_ALIGNMENT> temp;
+	UCHAR* header_page_buffer = temp.getAlignedBuffer(headerSize, ioBlockSize);
+
 	Ods::header_page* const header_page = reinterpret_cast<Ods::header_page*>(header_page_buffer);
 
-	PIO_header(tdbb, header_page_buffer, RAW_HEADER_SIZE);
+	PIO_header(tdbb, header_page_buffer, headerSize);
 
 	if ((header_page->hdr_flags & Ods::hdr_shutdown_mask) == Ods::hdr_shutdown_single)
 	{
@@ -8610,6 +8617,10 @@ static void unwindAttach(thread_db* tdbb, const Exception& ex, FbStatusVector* u
 		{
 			fb_assert(!dbb->locked());
 			ThreadStatusGuard temp_status(tdbb);
+
+			// In case when sweep attachment failed try to release appropriate lock
+			if (options.dpb_sweep)
+				dbb->clearSweepStarting();
 
 			const auto attachment = tdbb->getAttachment();
 

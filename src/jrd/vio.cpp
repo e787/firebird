@@ -1600,7 +1600,6 @@ bool VIO_erase(thread_db* tdbb, record_param* rpb, jrd_tra* transaction)
 		case rel_pages:
 		case rel_formats:
 		case rel_trans:
-		case rel_rcon:
 		case rel_refc:
 		case rel_ccon:
 		case rel_msgs:
@@ -1867,6 +1866,22 @@ bool VIO_erase(thread_db* tdbb, record_param* rpb, jrd_tra* transaction)
 			DFW_post_work(transaction, dfw_grant, &desc, id);
 			break;
 
+		case rel_rcon:
+			protect_system_table_delupd(tdbb, relation, "DELETE");
+
+			// ensure relation partners is known
+			EVL_field(0, rpb->rpb_record, f_rcon_rname, &desc);
+			{
+				MetaName relation_name;
+				MOV_get_metaname(tdbb, &desc, relation_name);
+				r2 = MET_lookup_relation(tdbb, relation_name);
+				fb_assert(r2);
+
+				if (r2)
+					MET_scan_partners(tdbb, r2);
+			}
+			break;
+
 		case rel_backup_history:
 			if (!tdbb->getAttachment()->locksmith(tdbb, USE_NBACKUP_UTILITY))
 				protect_system_table_delupd(tdbb, relation, "DELETE", true);
@@ -2053,6 +2068,13 @@ static void delete_version_chain(thread_db* tdbb, record_param* rpb, bool delete
 		rpb->rpb_flags, rpb->rpb_b_page, rpb->rpb_b_line,
 		rpb->rpb_f_page, rpb->rpb_f_line);
 #endif
+
+	// It's possible to get rpb_page == 0 from VIO_intermediate_gc via
+	// staying_chain_rpb. This case happens there when the staying record
+	// stack has 1 item at the moment this rpb is created. So return to
+	// avoid an error on DPM_fetch below.
+	if (!rpb->rpb_page)
+		return;
 
 	ULONG prior_page = 0;
 
