@@ -13,6 +13,9 @@ jobs:
         with:
           fetch-depth: 10
 
+      - name: Adjust snapshot build number
+        uses: ./.github/actions/adjust-snapshot-buildno
+
       - name: Prepare
         run: |
           sudo apt-get install libtool-bin libtomcrypt1 libtomcrypt-dev libtommath1 libtommath-dev libicu-dev zlib1g-dev
@@ -50,6 +53,9 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 10
+
+      - name: Adjust snapshot build number
+        uses: ./.github/actions/adjust-snapshot-buildno
 
       - name: Download and extract chroot environment
         run: |
@@ -131,7 +137,10 @@ jobs:
           fetch-depth: 10
 
       - name: Prepare
-        run: apk update && apk --no-cache --update add build-base libtool git autoconf automake zlib-dev icu-dev ncurses-dev libedit-dev linux-headers tar
+        run: apk update && apk --no-cache --update add build-base libtool git autoconf automake zlib-dev icu-dev ncurses-dev libedit-dev linux-headers tar sed
+
+      - name: Adjust snapshot build number
+        uses: ./.github/actions/adjust-snapshot-buildno
 
       - name: Build
         run: |
@@ -164,6 +173,9 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 10
+
+      - name: Adjust snapshot build number
+        uses: ./.github/actions/adjust-snapshot-buildno
 
       - name: Prepare
         shell: cmd
@@ -202,9 +214,21 @@ jobs:
         with:
           fetch-depth: 10
 
+      - name: Adjust snapshot build number
+        uses: ./.github/actions/adjust-snapshot-buildno
+
       - name: Prepare - Install tools
         run: |
           brew install automake libtool ninja
+
+      # libcxx build is not working with python >= 3.12
+      - name: Do not use preinstalled python >= 3.12
+        run: |
+          brew uninstall --ignore-dependencies python@3.12
+          [ -e /Library/Frameworks/Python.framework ] && \
+            sudo mv /Library/Frameworks/Python.framework /Library/Frameworks/Python.framework.dont-look-at-this
+          brew install python@3.11
+          ln -s "$(brew --prefix python@3.11)/bin/python3" "$(brew --prefix python@3.11)/bin/python"
 
       - name: Cache - libc++ install
         id: cache-libcxx-install-macos
@@ -266,6 +290,7 @@ jobs:
         run: |
           export LIBTOOLIZE=glibtoolize
           export LIBTOOL=glibtool
+          export PATH="$(brew --prefix python@3.11)/bin:$PATH"
 
           LIBICU_INSTALL_PATH=`pwd`/extern/libicu-macos-install
           pushd extern/libicu-macos/icu/source
@@ -284,6 +309,7 @@ jobs:
         run: |
           export LIBTOOLIZE=glibtoolize
           export LIBTOOL=glibtool
+          export PATH="$(brew --prefix python@3.11)/bin:$PATH"
 
           LIBCXX_INSTALL_PATH=`pwd`/extern/libcxx-macos-install
           LIBICU_INSTALL_PATH=`pwd`/extern/libicu-macos-install

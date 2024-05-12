@@ -187,7 +187,7 @@ public:
 	IndexRetrieval(jrd_rel* relation, const index_desc* idx, USHORT count, temporary_key* key)
 		: irb_relation(relation), irb_index(idx->idx_id),
 		  irb_generic(0), irb_lower_count(count), irb_upper_count(count), irb_key(key),
-		  irb_name(NULL), irb_value(NULL)
+		  irb_name(nullptr), irb_value(nullptr), irb_scale(nullptr)
 	{
 		memcpy(&irb_desc, idx, sizeof(irb_desc));
 	}
@@ -197,7 +197,8 @@ public:
 		: irb_relation(relation), irb_index(idx->idx_id),
 		  irb_generic(0), irb_lower_count(0), irb_upper_count(0), irb_key(NULL),
 		  irb_name(FB_NEW_POOL(pool) MetaName(name)),
-		  irb_value(FB_NEW_POOL(pool) ValueExprNode*[idx->idx_count * 2])
+		  irb_value(FB_NEW_POOL(pool) ValueExprNode*[idx->idx_count * 2]),
+		  irb_scale(nullptr)
 	{
 		memcpy(&irb_desc, idx, sizeof(irb_desc));
 	}
@@ -206,6 +207,7 @@ public:
 	{
 		delete irb_name;
 		delete[] irb_value;
+		delete[] irb_scale;
 	}
 
 	index_desc irb_desc;			// Index descriptor
@@ -215,8 +217,9 @@ public:
 	USHORT irb_lower_count;			// Number of segments for retrieval
 	USHORT irb_upper_count;			// Number of segments for retrieval
 	temporary_key* irb_key;			// Key for equality retrieval
-	MetaName* irb_name;	// Index name
-	ValueExprNode** irb_value;
+	MetaName* irb_name;				// Index name
+	ValueExprNode** irb_value;		// Matching value (for equality search)
+	SSHORT* irb_scale;				// Scale for int64 key
 };
 
 // Flag values for irb_generic
@@ -229,6 +232,10 @@ const int irb_descending	= 16;			// Base index uses descending order
 const int irb_exclude_lower	= 32;			// exclude lower bound keys while scanning index
 const int irb_exclude_upper	= 64;			// exclude upper bound keys while scanning index
 const int irb_multi_starting	= 128;		// Use INTL_KEY_MULTI_STARTING
+
+// Force include flags - always include appropriate key while scanning index
+const int irb_force_lower	= irb_exclude_lower;
+const int irb_force_upper	= irb_exclude_upper;
 
 typedef Firebird::HalfStaticArray<float, 4> SelectivityList;
 
@@ -320,7 +327,6 @@ private:
 	Location m_location;
 	bool isLocationDefined;
 };
-
 
 } //namespace Jrd
 

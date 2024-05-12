@@ -1851,8 +1851,7 @@ JAttachment* JProvider::internalAttach(CheckStatusWrapper* user_status, const ch
 
 				// Initialize TIP cache. We do this late to give SDW a chance to
 				// work while we read states for all interesting transactions
-				dbb->dbb_tip_cache = FB_NEW_POOL(*dbb->dbb_permanent) TipCache(dbb);
-				dbb->dbb_tip_cache->initializeTpc(tdbb);
+				dbb->startTipCache(tdbb);
 
 				// linger
 				dbb->dbb_linger_seconds = MET_get_linger(tdbb);
@@ -3164,8 +3163,7 @@ JAttachment* JProvider::createDatabase(CheckStatusWrapper* user_status, const ch
 			config->notify();
 
 			// Initialize TIP cache
-			dbb->dbb_tip_cache = FB_NEW_POOL(*dbb->dbb_permanent) TipCache(dbb);
-			dbb->dbb_tip_cache->initializeTpc(tdbb);
+			dbb->startTipCache(tdbb);
 
 			// Init complete - we can release dbInitMutex
 			dbb->dbb_flags &= ~(DBB_new | DBB_creating);
@@ -6442,8 +6440,7 @@ void JReplicator::freeEngineData(Firebird::CheckStatusWrapper* user_status)
 {
 	try
 	{
-		EngineContextHolder tdbb(user_status, this, FB_FUNCTION);
-		check_database(tdbb);
+		EngineContextHolder tdbb(user_status, this, FB_FUNCTION, AttachmentHolder::ATT_NO_SHUTDOWN_CHECK);
 
 		try
 		{
@@ -9764,6 +9761,8 @@ void TrigVector::release()
 
 void TrigVector::release(thread_db* tdbb)
 {
+	fb_assert(useCount.value() > 0);
+
 	if (--useCount == 0)
 	{
 		decompile(tdbb);

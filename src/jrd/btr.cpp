@@ -188,7 +188,8 @@ namespace
 
 static ULONG add_node(thread_db*, WIN*, index_insertion*, temporary_key*, RecordNumber*,
 					  ULONG*, ULONG*);
-static void compress(thread_db*, const dsc*, temporary_key*, USHORT, bool, bool, USHORT);
+static void compress(thread_db*, const dsc*, const SSHORT, temporary_key*, USHORT, bool, bool,
+					 USHORT, bool*);
 static USHORT compress_root(thread_db*, index_root_page*);
 static void copy_key(const temporary_key*, temporary_key*);
 static contents delete_node(thread_db*, WIN*, UCHAR*);
@@ -222,7 +223,7 @@ static contents remove_node(thread_db*, index_insertion*, WIN*);
 static contents remove_leaf_node(thread_db*, index_insertion*, WIN*);
 static bool scan(thread_db*, UCHAR*, RecordBitmap**, RecordBitmap*, index_desc*,
 				 const IndexRetrieval*, USHORT, temporary_key*,
-				 bool&, const temporary_key&);
+				 bool&, const temporary_key&, USHORT);
 static void update_selectivity(index_root_page*, USHORT, const SelectivityList&);
 static void checkForLowerKeySkip(bool&, const bool, const IndexNode&, const temporary_key&,
 								 const index_desc&, const IndexRetrieval*);
@@ -721,14 +722,15 @@ void BTR_evaluate(thread_db* tdbb, const IndexRetrieval* retrieval, RecordBitmap
 	temporary_key* lower = &lowerKey;
 	temporary_key* upper = &upperKey;
 	bool first = true;
+	USHORT forceInclFlag = 0;
 
 	do
 	{
-		btree_page* page = BTR_find_page(tdbb, retrieval, &window, &idx, lower, upper, first);
+		btree_page* page = BTR_find_page(tdbb, retrieval, &window, &idx, lower, upper, forceInclFlag, first);
 		first = false;
 
 		const bool descending = (idx.idx_flags & idx_descending);
-		bool skipLowerKey = (retrieval->irb_generic & irb_exclude_lower);
+		bool skipLowerKey = (retrieval->irb_generic & ~forceInclFlag) & irb_exclude_lower;
 		const bool partLower = (retrieval->irb_lower_count < idx.idx_count);
 
 		// If there is a starting descriptor, search down index to starting position.
@@ -769,7 +771,7 @@ void BTR_evaluate(thread_db* tdbb, const IndexRetrieval* retrieval, RecordBitmap
 		if (retrieval->irb_upper_count)
 		{
 			while (scan(tdbb, pointer, bitmap, bitmap_and, &idx, retrieval, prefix, upper,
-						skipLowerKey, *lower))
+						skipLowerKey, *lower, forceInclFlag))
 			{
 				page = (btree_page*) CCH_HANDOFF(tdbb, &window, page->btr_sibling, LCK_read, pag_index);
 				pointer = page->btr_nodes + page->btr_jump_size;
@@ -864,6 +866,7 @@ btree_page* BTR_find_page(thread_db* tdbb,
 						  index_desc* idx,
 						  temporary_key* lower,
 						  temporary_key* upper,
+						  USHORT& forceInclFlag,
 						  bool makeKeys)
 {
 /**************************************
@@ -898,21 +901,29 @@ btree_page* BTR_find_page(thread_db* tdbb,
 			(retrieval->irb_desc.idx_flags & idx_unique) ? INTL_KEY_UNIQUE :
 			INTL_KEY_SORT;
 
+		forceInclFlag &= ~(irb_force_lower | irb_force_upper);
+
 		if (retrieval->irb_upper_count)
 		{
+			bool forceInclude = false;
 			errorCode = BTR_make_key(tdbb, retrieval->irb_upper_count,
 									 retrieval->irb_value + retrieval->irb_desc.idx_count,
-									 &retrieval->irb_desc, upper,
-									 keyType);
+									 retrieval->irb_scale, &retrieval->irb_desc, upper,
+									 keyType, &forceInclude);
+			if (forceInclude)
+				forceInclFlag |= irb_force_upper;
 		}
 
 		if (errorCode == idx_e_ok)
 		{
 			if (retrieval->irb_lower_count)
 			{
+				bool forceInclude = false;
 				errorCode = BTR_make_key(tdbb, retrieval->irb_lower_count,
-										 retrieval->irb_value, &retrieval->irb_desc, lower,
-										 keyType);
+										 retrieval->irb_value, retrieval->irb_scale, &retrieval->irb_desc, lower,
+										 keyType, &forceInclude);
+				if (forceInclude)
+					forceInclFlag |= irb_force_lower;
 			}
 		}
 
@@ -1255,7 +1266,7 @@ idx_e BTR_key(thread_db* tdbb, jrd_rel* relation, Record* record, index_desc* id
 
 			key->key_flags |= key_empty;
 
-			compress(tdbb, desc_ptr, key, tail->idx_itype, isNull, descending, keyType);
+			compress(tdbb, desc_ptr, 0, key, tail->idx_itype, isNull, descending, keyType, nullptr);
 		}
 		else
 		{
@@ -1290,7 +1301,7 @@ idx_e BTR_key(thread_db* tdbb, jrd_rel* relation, Record* record, index_desc* id
 					}
 				}
 
-				compress(tdbb, desc_ptr, &temp, tail->idx_itype, isNull, descending, keyType);
+				compress(tdbb, desc_ptr, 0, &temp, tail->idx_itype, isNull, descending, keyType, nullptr);
 
 				const UCHAR* q = temp.key_data;
 				for (USHORT l = temp.key_length; l; --l, --stuff_count)
@@ -1520,9 +1531,11 @@ bool BTR_lookup(thread_db* tdbb, jrd_rel* relation, USHORT id, index_desc* buffe
 idx_e BTR_make_key(thread_db* tdbb,
 				   USHORT count,
 				   const ValueExprNode* const* exprs,
+				   const SSHORT* scale,
 				   const index_desc* idx,
 				   temporary_key* key,
-				   USHORT keyType)
+				   USHORT keyType,
+				   bool* forceInclude)
 {
 /**************************************
  *
@@ -1568,7 +1581,7 @@ idx_e BTR_make_key(thread_db* tdbb,
 		if (isNull)
 			key->key_nulls = 1;
 
-		compress(tdbb, desc, key, tail->idx_itype, isNull, descending, keyType);
+		compress(tdbb, desc, scale ? *scale : 0, key, tail->idx_itype, isNull, descending, keyType, forceInclude);
 
 		if (fuzzy && (key->key_flags & key_empty))
 		{
@@ -1602,9 +1615,10 @@ idx_e BTR_make_key(thread_db* tdbb,
 
 			temp.key_flags |= key_empty;
 
-			compress(tdbb, desc, &temp, tail->idx_itype, isNull, descending,
+			compress(tdbb, desc, scale ? *scale++ : 0, &temp, tail->idx_itype, isNull, descending,
 				(n == count - 1 ?
-					keyType : ((idx->idx_flags & idx_unique) ? INTL_KEY_UNIQUE : INTL_KEY_SORT)));
+					keyType : ((idx->idx_flags & idx_unique) ? INTL_KEY_UNIQUE : INTL_KEY_SORT)),
+				forceInclude);
 
 			if (!(temp.key_flags & key_empty))
 				is_key_empty = false;
@@ -1736,7 +1750,7 @@ void BTR_make_null_key(thread_db* tdbb, const index_desc* idx, temporary_key* ke
 	// If the index is a single segment index, don't sweat the compound stuff
 	if ((idx->idx_count == 1) || (idx->idx_flags & idx_expressn))
 	{
-		compress(tdbb, &null_desc, key, tail->idx_itype, true, descending, INTL_KEY_SORT);
+		compress(tdbb, &null_desc, 0, key, tail->idx_itype, true, descending, INTL_KEY_SORT, nullptr);
 	}
 	else
 	{
@@ -1750,7 +1764,7 @@ void BTR_make_null_key(thread_db* tdbb, const index_desc* idx, temporary_key* ke
 			for (; stuff_count; --stuff_count)
 				*p++ = 0;
 
-			compress(tdbb, &null_desc, &temp, tail->idx_itype, true, descending, INTL_KEY_SORT);
+			compress(tdbb, &null_desc, 0, &temp, tail->idx_itype, true, descending, INTL_KEY_SORT, nullptr);
 
 			const UCHAR* q = temp.key_data;
 			for (USHORT l = temp.key_length; l; --l, --stuff_count)
@@ -2446,9 +2460,11 @@ static ULONG add_node(thread_db* tdbb,
 
 static void compress(thread_db* tdbb,
 					 const dsc* desc,
+					 const SSHORT matchScale,
 					 temporary_key* key,
 					 USHORT itype,
-					 bool isNull, bool descending, USHORT key_type)
+					 bool isNull, bool descending, USHORT key_type,
+					 bool* forceInclude)
 {
 /**************************************
  *
@@ -2493,6 +2509,7 @@ static void compress(thread_db* tdbb,
 	size_t multiKeyLength;
 	UCHAR* ptr;
 	UCHAR* p = key->key_data;
+	SSHORT scale = matchScale ? matchScale : desc->dsc_scale;
 
 	if (itype == idx_string || itype == idx_byte_array || itype == idx_metadata ||
 		itype == idx_decimal || itype >= idx_first_intl_string)
@@ -2658,13 +2675,33 @@ static void compress(thread_db* tdbb,
 	else if (itype == idx_numeric2)
 	{
 		int64_key_op = true;
-		temp.temp_int64_key = make_int64_key(MOV_get_int64(tdbb, desc, desc->dsc_scale), desc->dsc_scale);
+		SINT64 v = 0;
+		try
+		{
+			v = MOV_get_int64(tdbb, desc, scale);
+		}
+		catch (const Exception& ex)
+		{
+			ex.stuffException(tdbb->tdbb_status_vector);
+			const ISC_STATUS* st = tdbb->tdbb_status_vector->getErrors();
+			if (!(fb_utils::containsErrorCode(st, isc_arith_except) ||
+				fb_utils::containsErrorCode(st, isc_decfloat_invalid_operation)))
+			{
+				throw;
+			}
+
+			tdbb->tdbb_status_vector->init();
+			v = MOV_get_dec128(tdbb, desc).sign() < 0 ? MIN_SINT64 : MAX_SINT64;
+			if (forceInclude)
+				*forceInclude = true;
+		}
+		temp.temp_int64_key = make_int64_key(v, scale);
 		temp_copy_length = sizeof(temp.temp_int64_key.d_part);
 		temp_is_negative = (temp.temp_int64_key.d_part < 0);
 
 #ifdef DEBUG_INDEXKEY
 		print_int64_key(*(const SINT64*) desc->dsc_address,
-			desc->dsc_scale, temp.temp_int64_key);
+			scale, temp.temp_int64_key);
 #endif
 
 	}
@@ -6401,7 +6438,7 @@ static contents remove_leaf_node(thread_db* tdbb, index_insertion* insertion, WI
 static bool scan(thread_db* tdbb, UCHAR* pointer, RecordBitmap** bitmap, RecordBitmap* bitmap_and,
 				 index_desc* idx, const IndexRetrieval* retrieval, USHORT prefix,
 				 temporary_key* key,
-				 bool& skipLowerKey, const temporary_key& lowerKey)
+				 bool& skipLowerKey, const temporary_key& lowerKey, USHORT forceInclFlag)
 {
 /**************************************
  *
@@ -6424,6 +6461,7 @@ static bool scan(thread_db* tdbb, UCHAR* pointer, RecordBitmap** bitmap, RecordB
 	// stuff the key to the stuff boundary
 	ULONG count;
 	USHORT flag = retrieval->irb_generic;
+	flag &= ~forceInclFlag;		// clear exclude bits if needed
 
 	if ((flag & irb_partial) && (flag & irb_equality) &&
 		!(flag & irb_starting) && !(flag & irb_descending))
